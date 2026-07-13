@@ -1,0 +1,31 @@
+name: self-hosted-runners
+
+# Runs jobs on our 3 SELF-HOSTED runners, each labeled by a fake "provider"
+# (azure / gcp / vm). This proves the ONLY way GitHub can tell you where a
+# self-hosted runner lives is a label (or runner-group) convention YOU control.
+#
+# runs-on resolves to: [self-hosted, <provider>] -> targets exactly one runner.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/self-hosted.yml']
+
+jobs:
+  self-hosted:
+    strategy:
+      fail-fast: false
+      matrix:
+        provider: [azure, gcp, vm]
+    runs-on: [self-hosted, "${{ matrix.provider }}"]
+    steps:
+      - name: Identify runner + "provider"
+        run: |
+          echo "Provider (from matrix label): ${{ matrix.provider }}"
+          echo "Runner name  : $RUNNER_NAME"
+          echo "Runner OS    : $RUNNER_OS / $RUNNER_ARCH"
+          echo "GitHub bills NOTHING for this and has no idea it is Docker on a laptop."
+          echo "The only signal that says '${{ matrix.provider }}' is the label we attached."
+      - name: Do a tiny bit of work
+        run: sleep 15

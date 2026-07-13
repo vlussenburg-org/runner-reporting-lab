@@ -1,0 +1,30 @@
+name: hosted-runners
+
+# Generates GitHub-HOSTED runner usage so we can prove what the portal
+# reports (Actions Usage Metrics) and the billing/timing APIs return:
+# minutes broken down by OS. A matrix across OSes shows the per-OS split.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/hosted.yml']
+
+jobs:
+  hosted:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Identify runner
+        shell: bash
+        run: |
+          echo "Runner name : $RUNNER_NAME"
+          echo "Runner OS   : $RUNNER_OS"
+          echo "Runner arch : $RUNNER_ARCH"
+          echo "Hosted GitHub-managed runner (billable minutes tracked by GitHub)."
+      - name: Burn a little time (so timing API has something to report)
+        shell: bash
+        run: sleep 20
