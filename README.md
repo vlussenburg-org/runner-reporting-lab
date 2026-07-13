@@ -98,3 +98,8 @@ scripts/deregister-runners.sh
 - Runner **inventory** is point-in-time (current runners), not historical.
 - This lab is repo-scoped for simplicity; the same calls exist at **org** and
   **enterprise** scope, which is how a large EMU customer (many orgs) would run it centrally.
+
+
+## Live sample report
+
+See [SAMPLE-REPORT.md](SAMPLE-REPORT.md) for real output from this lab (3 labeled Docker runners + hosted jobs).

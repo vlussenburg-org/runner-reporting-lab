@@ -66,6 +66,17 @@ def provider_for(labels: list[str], runner_name: str | None) -> str:
     return "unlabeled"
 
 
+def os_from_labels(labels: list[str]) -> str:
+    low = " ".join(labels).lower()
+    if "ubuntu" in low or "linux" in low:
+        return "UBUNTU"
+    if "windows" in low:
+        return "WINDOWS"
+    if "macos" in low or "mac" in low:
+        return "MACOS"
+    return "OTHER"
+
+
 def collect(repo: str, since: datetime, until: datetime):
     # ---- self-hosted inventory (point-in-time) ----
     inv = gh(f"repos/{repo}/actions/runners") or {"runners": []}
@@ -85,9 +96,13 @@ def collect(repo: str, since: datetime, until: datetime):
     pages = gh(f"repos/{repo}/actions/runs?created={created}&per_page=100", paginate=True, jq=".workflow_runs[]")
     runs = pages or []
 
-    # month -> hosted OS -> total_ms ; month -> provider -> {jobs, ms}
-    hosted = defaultdict(lambda: defaultdict(lambda: {"ms": 0, "jobs": 0}))
+    # hosted:  month -> OS -> {billable_ms, elapsed_ms, jobs}
+    # selfhosted: month -> provider -> {ms, jobs}
+    # runners_seen: reconstruct the self-hosted fleet FROM JOB HISTORY, so a
+    #   historical report still lists the runners even after ephemeral ones exit.
+    hosted = defaultdict(lambda: defaultdict(lambda: {"billable_ms": 0, "elapsed_ms": 0, "jobs": 0}))
     selfhosted = defaultdict(lambda: defaultdict(lambda: {"ms": 0, "jobs": 0}))
+    runners_seen: dict[str, dict] = {}
 
     for run in runs:
         created_at = parse_ts(run["created_at"])
@@ -96,102 +111,126 @@ def collect(repo: str, since: datetime, until: datetime):
         month = created_at.strftime("%Y-%m")
         run_id = run["id"]
 
-        # Hosted billable minutes come from the timing API (portal-grade numbers).
+        # BILLABLE minutes by OS from the timing API (same source as the portal
+        # report). NOTE: on PUBLIC repos hosted minutes are free -> billable=0.
         try:
             timing = gh(f"repos/{repo}/actions/runs/{run_id}/timing") or {}
         except RuntimeError:
             timing = {}
         for os_name, data in (timing.get("billable") or {}).items():
-            hosted[month][os_name]["ms"] += data.get("total_ms", 0)
-            hosted[month][os_name]["jobs"] += data.get("jobs", 0)
+            hosted[month][os_name]["billable_ms"] += data.get("total_ms", 0)
 
-        # Self-hosted: no billing exists, so compute duration from job timestamps
-        # and attribute to a provider via the job's labels.
         jobs = gh(f"repos/{repo}/actions/runs/{run_id}/jobs") or {"jobs": []}
         for job in jobs.get("jobs", []):
             labels = job.get("labels", []) or []
-            if not any(l.lower() == "self-hosted" for l in labels):
-                continue  # hosted jobs already counted via timing
-            prov = provider_for(labels, job.get("runner_name"))
             start, end = job.get("started_at"), job.get("completed_at")
-            ms = 0
+            elapsed = 0
             if start and end:
-                ms = max(0, int((parse_ts(end) - parse_ts(start)).total_seconds() * 1000))
-            selfhosted[month][prov]["ms"] += ms
-            selfhosted[month][prov]["jobs"] += 1
+                elapsed = max(0, int((parse_ts(end) - parse_ts(start)).total_seconds() * 1000))
 
-    return inventory, hosted, selfhosted
+            if any(l.lower() == "self-hosted" for l in labels):
+                prov = provider_for(labels, job.get("runner_name"))
+                selfhosted[month][prov]["ms"] += elapsed
+                selfhosted[month][prov]["jobs"] += 1
+                rn = job.get("runner_name") or f"(ephemeral:{prov})"
+                seen = runners_seen.setdefault(rn, {"provider": prov, "jobs": 0, "labels": labels})
+                seen["jobs"] += 1
+            else:
+                os_key = os_from_labels(labels)
+                hosted[month][os_key]["elapsed_ms"] += elapsed
+                hosted[month][os_key]["jobs"] += 1
+
+    return inventory, hosted, selfhosted, runners_seen
 
 
 def mins(ms: int) -> float:
     return round(ms / 60000, 1)
 
 
-def render_text(repo, since, until, inventory, hosted, selfhosted) -> str:
+def render_text(repo, since, until, inventory, hosted, selfhosted, runners_seen) -> str:
     L = []
     L.append(f"Runner Report — {repo}")
     L.append(f"Window: {since.date()} .. {until.date()}")
     L.append("")
-    L.append("Self-hosted runner inventory (current):")
+    L.append("Self-hosted runners CURRENTLY registered (point-in-time):")
     if inventory:
         for r in inventory:
             L.append(f"  - {r['name']:<16} provider={r['provider']:<10} status={r['status']:<8} labels={r['labels']}")
     else:
-        L.append("  (none registered)")
+        L.append("  (none online right now)")
+    L.append("")
+    L.append("Self-hosted runners SEEN IN WINDOW (from job history — survives ephemeral runners):")
+    if runners_seen:
+        for name, r in sorted(runners_seen.items()):
+            L.append(f"  - {name:<20} provider={r['provider']:<10} jobs={r['jobs']}")
+    else:
+        L.append("  (none)")
     L.append("")
 
     months = sorted(set(hosted) | set(selfhosted))
     for m in months:
         L.append(f"== {m} ==")
-        L.append("  HOSTED (billable minutes by OS — same source as portal report):")
+        L.append("  HOSTED by OS  (billable = portal source; elapsed = wall-clock):")
         if hosted.get(m):
+            L.append(f"    {'OS':<10} {'billable':>10} {'elapsed':>10}   jobs")
             for os_name, d in sorted(hosted[m].items()):
-                L.append(f"    {os_name:<10} {mins(d['ms']):>8} min   ({d['jobs']} jobs)")
+                L.append(f"    {os_name:<10} {mins(d['billable_ms']):>7} m  {mins(d['elapsed_ms']):>7} m   ({d['jobs']} jobs)")
         else:
             L.append("    (none)")
-        L.append("  SELF-HOSTED (computed minutes, attributed by provider LABEL):")
+        L.append("  SELF-HOSTED (computed elapsed minutes, attributed by provider LABEL):")
         if selfhosted.get(m):
             for prov, d in sorted(selfhosted[m].items()):
-                L.append(f"    {prov:<10} {mins(d['ms']):>8} min   ({d['jobs']} jobs)")
+                L.append(f"    {prov:<10} {mins(d['ms']):>7} m   ({d['jobs']} jobs)")
         else:
             L.append("    (none)")
         L.append("")
     if not months:
         L.append("(no workflow runs in window)")
-    L.append("NOTE: 'provider' for self-hosted is derived ONLY from labels/runner names —")
-    L.append("GitHub has no native visibility into the underlying VM/cloud.")
+    L.append("NOTES:")
+    L.append("  - Self-hosted 'provider' is derived ONLY from labels/runner names —")
+    L.append("    GitHub has no native visibility into the underlying VM/cloud.")
+    L.append("  - Hosted 'billable' is 0 on PUBLIC repos (free minutes); on private/EMU")
+    L.append("    repos it is populated — that column is the portal/billing number.")
     return "\n".join(L)
 
 
-def render_md(repo, since, until, inventory, hosted, selfhosted) -> str:
+def render_md(repo, since, until, inventory, hosted, selfhosted, runners_seen) -> str:
     L = [f"# Runner Report — `{repo}`", "", f"**Window:** {since.date()} .. {until.date()}", ""]
-    L.append("## Self-hosted inventory")
+    L.append("## Self-hosted runners currently registered")
     L.append("| Runner | Provider (from label) | Status | Labels |")
     L.append("|---|---|---|---|")
     for r in inventory or []:
         L.append(f"| `{r['name']}` | {r['provider']} | {r['status']} | {', '.join(r['labels'])} |")
     if not inventory:
-        L.append("| _(none)_ | | | |")
+        L.append("| _(none online right now)_ | | | |")
+    L.append("")
+    L.append("## Self-hosted runners seen in window (from job history)")
+    L.append("| Runner | Provider | Jobs |")
+    L.append("|---|---|--:|")
+    for name, r in sorted(runners_seen.items()):
+        L.append(f"| `{name}` | {r['provider']} | {r['jobs']} |")
+    if not runners_seen:
+        L.append("| _(none)_ | | |")
     L.append("")
     months = sorted(set(hosted) | set(selfhosted))
     for m in months:
         L.append(f"## {m}")
-        L.append("**Hosted — billable minutes by OS** (portal-grade source)")
+        L.append("**Hosted by OS** — `billable` is the portal/billing number (0 on public repos); `elapsed` is wall-clock")
         L.append("")
-        L.append("| OS | Minutes | Jobs |")
-        L.append("|---|--:|--:|")
+        L.append("| OS | Billable min | Elapsed min | Jobs |")
+        L.append("|---|--:|--:|--:|")
         for os_name, d in sorted(hosted.get(m, {}).items()):
-            L.append(f"| {os_name} | {mins(d['ms'])} | {d['jobs']} |")
+            L.append(f"| {os_name} | {mins(d['billable_ms'])} | {mins(d['elapsed_ms'])} | {d['jobs']} |")
         L.append("")
-        L.append("**Self-hosted — computed minutes by provider label**")
+        L.append("**Self-hosted — computed elapsed minutes by provider label**")
         L.append("")
         L.append("| Provider | Minutes | Jobs |")
         L.append("|---|--:|--:|")
         for prov, d in sorted(selfhosted.get(m, {}).items()):
             L.append(f"| {prov} | {mins(d['ms'])} | {d['jobs']} |")
         L.append("")
-    L.append("> Self-hosted `provider` is derived only from labels/runner names. "
-             "GitHub has no native visibility into the underlying VM/cloud.")
+    L.append("> Self-hosted `provider` is derived only from labels/runner names — GitHub has no")
+    L.append("> native visibility into the underlying VM/cloud. Hosted `billable` is 0 on public repos.")
     return "\n".join(L)
 
 
@@ -206,20 +245,21 @@ def main():
     since = datetime.strptime(args.since, "%Y-%m-%d").replace(tzinfo=timezone.utc)
     until = datetime.strptime(args.until, "%Y-%m-%d").replace(hour=23, minute=59, second=59, tzinfo=timezone.utc)
 
-    inventory, hosted, selfhosted = collect(args.repo, since, until)
+    inventory, hosted, selfhosted, runners_seen = collect(args.repo, since, until)
 
     if args.format == "json":
         print(json.dumps({
             "repo": args.repo,
             "window": {"since": args.since, "until": args.until},
             "inventory": inventory,
+            "runners_seen": runners_seen,
             "hosted": {m: dict(d) for m, d in hosted.items()},
             "self_hosted": {m: dict(d) for m, d in selfhosted.items()},
         }, indent=2))
     elif args.format == "md":
-        print(render_md(args.repo, since, until, inventory, hosted, selfhosted))
+        print(render_md(args.repo, since, until, inventory, hosted, selfhosted, runners_seen))
     else:
-        print(render_text(args.repo, since, until, inventory, hosted, selfhosted))
+        print(render_text(args.repo, since, until, inventory, hosted, selfhosted, runners_seen))
 
 
 if __name__ == "__main__":
