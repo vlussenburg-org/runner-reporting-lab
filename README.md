@@ -39,7 +39,8 @@ Azure" is the label — which is exactly the mechanism the customer would use at
 - [`.github/workflows/hosted.yml`](.github/workflows/hosted.yml) — GitHub-hosted jobs (ubuntu + windows) to generate real hosted usage.
 - [`.github/workflows/self-hosted.yml`](.github/workflows/self-hosted.yml) — one job per provider label.
 - [`docker/compose.yml`](docker/compose.yml) — the 3 labeled runners.
-- [`scripts/runner-report.py`](scripts/runner-report.py) — builds the monthly report from GitHub data only.
+- **[`prompts/runner-report.prompt.md`](prompts/runner-report.prompt.md) — the report generator: a prompt you paste into Copilot CLI (works at repo/org/enterprise scope).**
+- [`scripts/runner-report.py`](scripts/runner-report.py) — _optional_ deterministic equivalent of the prompt, for CI/scheduled runs.
 
 ---
 
@@ -53,12 +54,17 @@ scripts/register-runners.sh
 gh workflow run hosted.yml      -R vlussenburg-org/runner-reporting-lab
 gh workflow run self-hosted.yml -R vlussenburg-org/runner-reporting-lab
 
-# 3. Build the report (any date window; e.g. Apr–Jun)
-python3 scripts/runner-report.py --since 2026-04-01 --until 2026-06-30 --format md
-
 # 4. Tear the runners down (auto-deregisters from GitHub)
 scripts/deregister-runners.sh
 ```
+
+**3. Build the report — paste [`prompts/runner-report.prompt.md`](prompts/runner-report.prompt.md)
+into Copilot CLI** (edit the SCOPE / TARGET / WINDOW inputs first). The agent hits the GitHub APIs
+itself and returns the finished Markdown report — no script to run. See
+[`SAMPLE-REPORT.md`](SAMPLE-REPORT.md) for the shape of the output.
+
+> Prefer a deterministic, schedulable version? `scripts/runner-report.py --since … --until … --format md`
+> produces the same report programmatically.
 
 > Self-hosted runners are **outbound-only** (they long-poll GitHub), so no inbound
 > networking / Tailscale funnel is required to register or run them.
