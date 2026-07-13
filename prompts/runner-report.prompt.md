@@ -13,6 +13,8 @@ where each self-hosted runner is hosted (VM/GCP/Azure/…)* — using only data 
 - **TARGET**: e.g. `owner/repo`, or `my-org`, or `my-enterprise-slug`
 - **WINDOW**: `2026-04-01` .. `2026-06-30`
 - **PROVIDER LABELS** (the customer's "where hosted" vocabulary): `azure, gcp, aws, vm, onprem`
+  — note runners can carry **multiple labels** at once (e.g. `azure,eastus2,team-payments,vm-size-D4s`),
+  so the same data can also be sliced by region/team/size if those labels exist.
 
 ---
 
@@ -71,8 +73,10 @@ report — do not write a script. Be rigorous and honest about what GitHub can a
    - A short **Notes** block restating: provider is label-derived only (no native infra visibility);
      hosted billable is 0 on public repos; self-hosted minutes are computed, not billed.
 
-7. **Close with 2–3 recommendations**, e.g.: adopt a provider **label convention** and/or
-   **runner groups named by provider** so "where hosted" becomes reportable; use the billing usage
-   API for the monthly hosted export; note that self-hosted has no native cost metric.
+7. **Close with 2–3 recommendations**, e.g.: adopt a **multi-label convention** on each self-hosted
+   runner (set at registration, e.g. `--labels azure,eastus2,team-payments,vm-size-D4s`) so "where
+   hosted" — and region/team/size — become reportable; prefer labels over runner groups for
+   reporting flexibility; use the billing usage API for the monthly hosted export; note that
+   self-hosted has no native cost metric.
 
 Output only the finished report.

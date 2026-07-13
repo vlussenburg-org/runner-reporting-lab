@@ -91,9 +91,19 @@ itself and returns the finished Markdown report — no script to run. See
 
 1. **Hosted:** use the Usage Metrics dashboard for the portal view and the billing
    usage API for the monthly Apr/May/Jun export. Already fully available.
-2. **Self-hosted location:** adopt a **label convention** (`azure`, `gcp`, `onprem`, …)
-   and/or **runner groups named by provider** (they're on Enterprise, so runner groups
-   are available). Without this, "where hosted" is unanswerable from the GitHub side.
+2. **Self-hosted location:** adopt a **multi-label convention** on each runner and let the
+   report slice on them. Runners can carry several labels at once — provider, region, team,
+   and size — set at registration:
+
+   ```
+   ./config.sh --url <url> --token <token> --labels azure,eastus2,team-payments,vm-size-D4s
+   ```
+
+   Prefer **labels over runner groups** for this — labels are per-runner and far more flexible
+   for reporting (you can group by provider *or* region *or* team). Runner groups can also bucket
+   runners, but they're coarser. See the docs on
+   [applying custom labels to org runners](https://docs.github.com/en/actions/how-tos/manage-runners/self-hosted-runners/apply-labels#creating-a-custom-label-for-an-organization-runner).
+   Without any such convention, "where hosted" is unanswerable from the GitHub side.
 3. **Self-hosted minutes:** if they want cost-style numbers, compute duration from job
    timestamps (as this script does) — GitHub does not meter self-hosted compute.
 
